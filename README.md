@@ -145,6 +145,14 @@ python -m pytest -q
 
 Baseline log chưa đạt là bình thường vì các `TODO` của CP1 chưa được làm. Ghi lại kết quả baseline vào `submission/REPORT.md` trước khi sửa.
 
+Sau khi workload đã tạo log, chạy dashboard runtime ở terminal thứ ba:
+
+```bash
+python scripts/dashboard.py --port 8501
+```
+
+Mở `http://127.0.0.1:8501/`. Trang đọc trực tiếp `data/logs.jsonl` trong cửa sổ 60 phút, hiển thị sáu panel theo `config/dashboard.yaml` và tự tải lại mỗi 30 giây. Nếu cửa sổ không có request, dashboard hiển thị `No data` thay vì tạo số liệu giả.
+
 ## Lộ trình 9:00–13:00 (240 phút)
 
 | Mốc | Thời gian | Việc chính | Hoàn thành khi |

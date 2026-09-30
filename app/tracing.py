@@ -37,6 +37,12 @@ def get_langfuse_client():
 
 
 def tracing_enabled() -> bool:
-    return LANGFUSE_SDK_AVAILABLE and bool(
+    explicitly_enabled = os.getenv("LANGFUSE_TRACING_ENABLED", "true").lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    return LANGFUSE_SDK_AVAILABLE and explicitly_enabled and bool(
         os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")
     )

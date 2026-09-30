@@ -1,25 +1,31 @@
 alerts:
-  - name: TODO_alert_1
-    severity: TODO
-    condition: TODO
-    duration: TODO
+  - name: high_response_latency
+    severity: warning
+    condition: 'P95(response_sent.latency_ms) > 3000 over 5m with at least 10 requests'
+    duration: 5m
     type: symptom-based
     channel: slack
-    owner: TODO
+    slack_channel: '#day13-llmops-alerts'
+    owner: service-operator
+    slo: fast_successful_requests
     runbook: docs/alerts.md#alert-1
-  - name: TODO_alert_2
-    severity: TODO
-    condition: TODO
-    duration: TODO
+  - name: high_request_failure_rate
+    severity: critical
+    condition: 'count(request_failed) / count(request_received) > 0.02 over 5m with at least 10 requests'
+    duration: 5m
     type: symptom-based
     channel: slack
-    owner: TODO
+    slack_channel: '#day13-llmops-alerts'
+    owner: service-operator
+    slo: fast_successful_requests
     runbook: docs/alerts.md#alert-2
-  - name: TODO_alert_3
-    severity: TODO
-    condition: TODO
-    duration: TODO
+  - name: high_cost_per_request
+    severity: warning
+    condition: 'sum(response_sent.cost_usd) / count(response_sent) > 0.01 USD over 10m with at least 10 responses'
+    duration: 10m
     type: symptom-based
     channel: slack
-    owner: TODO
+    slack_channel: '#day13-llmops-alerts'
+    owner: service-operator
+    related_guardrail: daily_cost_usd_max
     runbook: docs/alerts.md#alert-3

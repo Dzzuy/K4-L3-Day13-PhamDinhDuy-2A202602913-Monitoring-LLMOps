@@ -7,7 +7,10 @@ primary_slo:
     total_event: 'event == "request_received"'
   target_percent: 99.5
   error_budget_percent: 0.5
-  note: Học viên phải giải thích hoặc điều chỉnh ngưỡng bằng baseline của mình. Ví dụ nếu có 10,000 request trong cửa sổ 28 ngày, error budget 0.5% nghĩa là tối đa 50 request được phép không đạt SLO.
+  note: 'Steady-state local requests were approximately 152-155 ms with TTFT P95 50 ms and 0 errors; the first prompt fetch had cold-start overhead. The 3000 ms threshold detects the 2500 ms retrieval delay plus overhead; validate with a larger workload before production use.'
+  example_budget: 'For 1000 requests in 28 days, at most 5 may fail or exceed 3000 ms.'
+  burn_rate: 'Page if bad-event rate exceeds 4x the 0.5% budget (2%) for 5 minutes; review a 1-hour window to avoid reacting to one request.'
+  measurement_limit: 'response_sent.latency_ms measures agent execution, not client queueing or network time; compare x-response-time-ms and load-test client latency.'
 guardrails:
   error_rate_pct_max: 2
   daily_cost_usd_max: 2.5

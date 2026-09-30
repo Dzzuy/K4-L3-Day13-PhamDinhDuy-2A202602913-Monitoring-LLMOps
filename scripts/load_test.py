@@ -18,17 +18,19 @@ BASE_URL = "http://127.0.0.1:8000"
 QUERIES = Path("data/sample_queries.jsonl")
 
 
-def send_request(client: httpx.Client, payload: dict) -> None:
+def send_request(client: httpx.Client, payload: dict) -> bool:
     try:
         start = time.perf_counter()
         r = client.post(f"{BASE_URL}/chat", json=payload)
         latency = (time.perf_counter() - start) * 1000
         print(f"[{r.status_code}] {r.json().get('correlation_id')} | {payload['feature']} | {latency:.1f}ms")
+        return r.is_success
     except Exception as e:
         print(f"Error: {e}")
+        return False
 
 
-def main() -> None:
+def main() -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser()
     parser.add_argument("--concurrency", type=int, default=1, help="Number of concurrent requests")
@@ -54,11 +56,11 @@ def main() -> None:
         if args.concurrency > 1:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as executor:
                 futures = [executor.submit(send_request, client, payload) for payload in payloads]
-                concurrent.futures.wait(futures)
+                results = [future.result() for future in futures]
         else:
-            for payload in payloads:
-                send_request(client, payload)
+            results = [send_request(client, payload) for payload in payloads]
+    return 0 if all(results) else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -5,10 +5,10 @@ import time
 from dataclasses import dataclass
 
 from . import metrics
-from .mock_llm import FakeLLM
+from .mock_llm import FakeLLM, FakeResponse
 from .mock_rag import retrieve
 from .pii import hash_user_id, summarize_text
-from .prompt_management import resolve_prompt
+from .prompt_management import ResolvedPrompt, resolve_prompt
 from .tracing import get_langfuse_client, observe, propagate_attributes, tracing_enabled
 
 
@@ -21,6 +21,7 @@ class AgentResult:
     tokens_out: int
     cost_usd: float
     quality_score: float
+    trace_id: str | None = None
 
 
 class LabAgent:
@@ -40,7 +41,7 @@ class LabAgent:
         langfuse_client = get_langfuse_client()
         with propagate_attributes(
             user_id=hash_user_id(user_id),
-            session_id=session_id,
+            session_id=hash_user_id(session_id),
             tags=["lab", feature, self.model],
             trace_name="day13-agent-request",
             environment=os.getenv("APP_ENV", "dev"),
@@ -51,7 +52,13 @@ class LabAgent:
             },
         ):
             started = time.perf_counter()
-            docs = retrieve(message)
+            trace_id_getter = getattr(langfuse_client, "get_current_trace_id", None)
+            trace_id = (
+                trace_id_getter()
+                if tracing_enabled() and callable(trace_id_getter)
+                else None
+            )
+            docs = self._retrieve(message, correlation_id)
             prompt = resolve_prompt(
                 langfuse_client,
                 feature=feature,
@@ -71,10 +78,8 @@ class LabAgent:
                 },
                 version=prompt.version,
             )
-            # TODO (CP2): instrument retrieve() and FakeLLM.generate() as child
-            # observations. The nested generation must receive prompt, usage and cost.
             with propagate_attributes(prompt=prompt.managed_prompt):
-                response = self.llm.generate(prompt.text)
+                response = self._generate(prompt, correlation_id)
             quality_score = self._heuristic_quality(message, response.text, docs)
             latency_ms = int((time.perf_counter() - started) * 1000)
             cost_usd = self._estimate_cost(response.usage.input_tokens, response.usage.output_tokens)
@@ -96,7 +101,72 @@ class LabAgent:
             tokens_out=response.usage.output_tokens,
             cost_usd=cost_usd,
             quality_score=quality_score,
+            trace_id=trace_id,
         )
+
+    @observe(name="retrieval", as_type="retriever", capture_input=False, capture_output=False)
+    def _retrieve(self, message: str, correlation_id: str) -> list[str]:
+        client = get_langfuse_client()
+        started = time.perf_counter()
+        try:
+            docs = retrieve(message)
+        except Exception as exc:
+            client.update_current_span(
+                metadata={
+                    "correlation_id": correlation_id,
+                    "success": False,
+                    "latency_ms": round(
+                        (time.perf_counter() - started) * 1000, 2
+                    ),
+                },
+                level="ERROR",
+                status_message=type(exc).__name__,
+            )
+            raise
+        client.update_current_span(
+            metadata={
+                "correlation_id": correlation_id,
+                "success": True,
+                "doc_count": len(docs),
+                "latency_ms": round(
+                    (time.perf_counter() - started) * 1000, 2
+                ),
+            },
+        )
+        return docs
+
+    @observe(name="generation", as_type="generation", capture_input=False, capture_output=False)
+    def _generate(self, prompt: ResolvedPrompt, correlation_id: str) -> FakeResponse:
+        client = get_langfuse_client()
+        started = time.perf_counter()
+        response = self.llm.generate(prompt.text)
+        cost = self._estimate_cost(
+            response.usage.input_tokens, response.usage.output_tokens
+        )
+        client.update_current_generation(
+            model=response.model,
+            prompt=prompt.managed_prompt,
+            version=prompt.version,
+            usage_details={
+                "input": response.usage.input_tokens,
+                "output": response.usage.output_tokens,
+                "total": response.usage.input_tokens
+                + response.usage.output_tokens,
+            },
+            cost_details={"total": cost},
+            metadata={
+                "correlation_id": correlation_id,
+                "prompt_name": prompt.name,
+                "prompt_label": prompt.label,
+                "prompt_version": prompt.version,
+                "prompt_source": prompt.source,
+                "ttft_ms": response.ttft_ms,
+                "latency_ms": round(
+                    (time.perf_counter() - started) * 1000, 2
+                ),
+            },
+        )
+        return response
 
     def _estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
         input_cost = (tokens_in / 1_000_000) * 3
