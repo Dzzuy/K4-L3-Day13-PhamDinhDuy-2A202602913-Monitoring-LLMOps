@@ -37,11 +37,11 @@ Giữ đúng ba output text và năm ảnh dưới đây. Không tách thêm ả
 
 | Nội dung | Baseline | Kết quả cuối | Nhận xét |
 |---|---:|---:|---|
-| `validate_logs.py` | 30/100 | 100/100 | Baseline có 20/21 dòng thiếu field; lần cuối có 79 dòng hợp lệ |
+| `validate_logs.py` | 30/100 | 100/100 | Baseline có 20/21 dòng thiếu field; lần chạy cuối có 121 dòng, 58 correlation IDs và 0 PII leak |
 | `validate_dashboard.py` | 6/6 | 6/6 | Contract YAML có đủ sáu panel |
 | `pytest` | 22 tests pass | 30 tests pass | Bổ sung test cho context, PII lồng nhau, dashboard, load-test failure và cờ tắt tracing |
-| Số traces | 0 trong lần baseline code | 36 request có trace ID | Có nhiều hơn mức tối thiểu 10 trace trong project cá nhân |
-| Số PII leak | 0 | 0 | Validator quét 79 dòng log |
+| Số traces | 0 trong lần baseline code | >10 traces tự tạo | Đạt yêu cầu tối thiểu trong project Langfuse cá nhân |
+| Số PII leak | 0 | 0 | Validator quét 121 dòng log |
 | Latency P95 / TTFT P95 | Chưa đo sạch | 2.654 s / 50 ms | P95 tăng do challenge `rag_slow` |
 | Retrieval success rate | Chưa đo | 100% | Challenge là slow retrieval, không phải retrieval failure |
 
@@ -70,8 +70,6 @@ Giữ đúng ba output text và năm ảnh dưới đây. Không tách thêm ả
 - **Cách tính error budget:** Error budget là 0.5%. Với 1,000 request trong 28 ngày, tối đa 5 request được phép lỗi hoặc chậm hơn 3000 ms. Alert 5 phút dùng burn rate 4x, tương đương bad-event rate 2%, và cần tối thiểu 10 request để tránh cảnh báo từ một mẫu đơn lẻ.
 - **Ba alert và runbook tương ứng:** `high_response_latency` (P95 > 3000 ms/5m), `high_request_failure_rate` (>2%/5m) và `high_cost_per_request` (>0.01 USD/10m). Mỗi rule có severity, duration, owner, Slack `#day13-llmops-alerts` và runbook Metrics → Logs → Traces trong `docs/alerts.md`.
 
-> Ví dụ cách viết error budget: "SLO 99.5% trong 28 ngày nghĩa là error budget 0.5%. Nếu workload có 10,000 request thì tối đa 50 request được phép lỗi hoặc chậm hơn ngưỡng SLO."
-
 ## 7. Điều tra challenge
 
 - **Challenge ID:** `day13-k4-l3b-monitoring-llmops-v1`, seed 1312, incident `rag_slow`, feature `monitoring`.
@@ -81,19 +79,17 @@ Giữ đúng ba output text và năm ảnh dưới đây. Không tách thêm ả
 - **Trace ID và span gây ảnh hưởng:** Trace `63992cc3d977054132d4edc6dc1e5ac2`; root 2.655 giây, child `retrieval` 2.501 giây, child `generation` 0.151 giây. Retrieval chiếm khoảng 94% thời gian root.
 - **Root cause:** Scenario chính thức bật độ trễ 2.5 giây trong retrieval. Metric, log và trace cùng xác nhận bottleneck nằm ở retrieval, không phải generation hay TTFT.
 - **Fix action:** Tắt `rag_slow` bằng injector sau khi thu evidence; trong production sẽ rollback/deploy lại dependency retrieval khỏe, đặt timeout và trả degraded response có kiểm soát nếu vector store chậm.
-- **Preventive measure:** Duy trì alert P95/burn-rate, theo dõi riêng retrieval span, thêm timeout/circuit breaker và chạy regression workload trước release. Runbook bắt buộc nối metric với correlation ID và trace trước khi kết luận.
-
-> Gợi ý cách viết ngắn, không thay cho evidence thực tế: "Metric cho thấy `[latency/error/cost/quality]` bất thường trong `[khoảng thời gian]`. Log line `[event]` có `correlation_id=[...]` đại diện cho request bị ảnh hưởng. Trace cùng `correlation_id` cho thấy span `[retrieval/generation/prompt/tool]` có dấu hiệu `[chậm/lỗi/token tăng]`. Root cause là `[nguyên nhân suy ra từ evidence]`. Fix action là `[hành động khôi phục]`; preventive measure là `[alert/runbook/test/guardrail để ngăn tái diễn]`."
+- **Preventive measure:** Giữ alert cho P95 latency và theo dõi riêng thời gian của retrieval span. Nếu retrieval vượt timeout thì cần fail hoặc fallback có kiểm soát. Trước khi kết luận nguyên nhân, tôi sẽ luôn kiểm tra cùng `correlation_id` giữa log và trace.
 
 ## 8. Giải thích và tự đánh giá
 
 - **Một quyết định kỹ thuật quan trọng và lý do:** Tôi tách retrieval và generation thành child observations thay vì chỉ ghi root. Nhờ vậy trace cho biết rõ 2.501 giây nằm ở retrieval, đồng thời generation vẫn có token/cost/prompt version để phân tích độc lập.
-- **Một lỗi/blocker đã gặp:** Project Langfuse ban đầu chưa có `day13-chat`, nên mười trace đầu dùng `local-fallback`. Ngoài ra, đưa hàm có Langfuse observation vào worker thread làm request test bị treo với SDK v4.15.6.
-- **Cách tìm nguyên nhân và xử lý:** Log server cho thấy lỗi 404 prompt; tôi tạo đúng v1/v2 và kiểm tra metadata trace qua observations API. Với lỗi treo, tôi cô lập đường gọi direct/threaded, giữ observation trong request context hiện tại và bổ sung cách tắt tracing rõ ràng cho test; 30 tests sau đó chạy xong.
+- **Một lỗi/blocker đã gặp:** Ban đầu tôi tưởng dashboard dùng Streamlit nên chạy `streamlit run app/dashboard.py`, dẫn đến lỗi dependency và import. Sau khi kiểm tra lại README và source, tôi thấy dashboard của repo chạy bằng `python scripts/dashboard.py --port 8501`. Port 8501 cũng từng bị process cũ chiếm.
+- **Cách tìm nguyên nhân và xử lý:** Tôi đối chiếu entrypoint trong `scripts/dashboard.py`, dùng môi trường `.venv` chính của repo và chạy dashboard ở port còn trống. Việc này cũng cho thấy dashboard chỉ đọc log trong cửa sổ 60 phút, nên cần chụp evidence ngay sau workload challenge.
 - **Cách hiểu luồng Metrics → Logs → Traces:** Metrics khoanh vùng thời gian và loại triệu chứng. Log chọn một request cụ thể bằng correlation ID. Trace cùng ID phân rã latency theo span để tìm bước gây ảnh hưởng. Root cause chỉ được kết luận khi cả ba lớp nhất quán.
 - **Vai trò của prompt version, token/cost, SLO hoặc rollback trong vận hành LLM:** Prompt version gắn thay đổi hành vi với từng trace; token/cost cho thấy tác động tài chính; SLO định nghĩa mức dịch vụ chấp nhận được; label `production` cho phép rollback prompt nhanh mà không cần sửa code.
-- **Điều quan trọng nhất đã học:** Observability hữu ích khi các tín hiệu dùng chung định danh và contract. Một dashboard đẹp hoặc một trace riêng lẻ chưa đủ nếu không nối được về request và metric.
-- **Hạn chế hoặc phần chưa hoàn thành, nếu có:** Ba ảnh Langfuse và ảnh log (`01`–`04`) chưa chụp trong UI vì phiên browser tự động không khởi động được; dữ liệu, trace IDs và trạng thái prompt đã sẵn sàng để chụp thủ công. Commit SHA cuối chỉ điền sau khi kiểm tra ảnh và commit.
+- **Điều quan trọng nhất đã học:** Trước đây tôi thường xem metric, log và trace riêng lẻ. Qua bài này tôi thấy `correlation_id` là phần quan trọng để nối chúng lại với nhau. Nếu không nối được cùng một request thì rất khó kết luận root cause chắc chắn.
+- **Hạn chế hoặc phần chưa hoàn thành, nếu có:** Dashboard hiện đọc log trong cửa sổ 60 phút và chạy local, nên dữ liệu cũ sẽ không còn xuất hiện sau khi hết cửa sổ. Đây là giới hạn của dashboard lab hiện tại, không phải hệ thống monitoring production đầy đủ.
 
 ## 9. Checklist trước khi nộp
 
@@ -101,7 +97,7 @@ Giữ đúng ba output text và năm ảnh dưới đây. Không tách thêm ả
 - [ ] Tất cả ảnh/output mở được bằng đường dẫn tương đối.
 - [ ] Có đúng 3 file text và 5 ảnh runtime theo hướng dẫn.
 - [x] Incident evidence nối đúng metric → log → trace.
-- [x] Trace/prompt runtime thuộc project Langfuse cá nhân; cần chụp ảnh 02–04 mà không mở trang API Keys.
+- [x] Trace/prompt runtime thuộc project Langfuse cá nhân; ảnh không mở trang API Keys.
 - [x] Repository chạy lại được theo README.
 - [x] Không có secret, API key, PII thô hoặc evidence của người khác/lớp khác.
 - [ ] URL repo và commit SHA cuối đã được nộp trên LMS/Codelabs.
